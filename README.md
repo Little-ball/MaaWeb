@@ -43,10 +43,12 @@ cd server
 cargo build --release
 ./target/release/maaweb-server \
     --core-lib core_runtime/libMaaCore.so \
-    --resource-dir core_runtime/resource \
+    --resource-dir core_runtime \
     --web-dir ../web/dist \
     --bind 0.0.0.0:8080
 ```
+
+> `--resource-dir` 传根目录（含 `resource/` 子目录），这是 MaaCore 的 `AsstLoadResource` 要求。
 
 ### 3. 构建前端
 

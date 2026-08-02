@@ -110,8 +110,7 @@ impl MaaCore {
     /// Loads an arbitrary shared library; the caller must supply a path to a
     /// genuine MaaCore library. The library is intentionally leaked so its
     /// symbols live for the process lifetime (fine for a long-running server).
-    pub unsafe fn load(path: &str) -> anyhow::Result<MaaCore> {
-        // Leak the library to obtain a 'static reference so Symbol<'static, _>
+    pub unsafe fn load(path: &str) -> anyhow::Result<MaaCore> {        // Leak the library to obtain a 'static reference so Symbol<'static, _>
         // is valid. The library lives for the lifetime of the process.
         let lib: &'static Library = Box::leak(Box::new(Library::new(path)?));
 
@@ -153,6 +152,22 @@ impl MaaCore {
             }
         }
     }
+
+    /// Global (static) user dir setup. Must be called BEFORE `AsstCreate`.
+    pub fn set_user_dir(&self, path: &str) -> anyhow::Result<()> {
+        let c = CString::new(path)?;
+        let ok = unsafe { (self.set_user_dir)(c.as_ptr()) };
+        anyhow::ensure!(ok != 0, "AsstSetUserDir failed");
+        Ok(())
+    }
+
+    /// Global (static) resource loading. Must be called BEFORE `AsstCreate`.
+    pub fn load_resource(&self, path: &str) -> anyhow::Result<()> {
+        let c = CString::new(path)?;
+        let ok = unsafe { (self.load_resource)(c.as_ptr()) };
+        anyhow::ensure!(ok != 0, "AsstLoadResource failed");
+        Ok(())
+    }
 }
 
 // ---- Safe wrappers ----
@@ -167,29 +182,17 @@ unsafe impl Send for Asst {}
 unsafe impl Sync for Asst {}
 
 impl Asst {
-    pub fn create(core: Arc<MaaCore>, callback: Option<AsstApiCallback>, arg: *mut c_void) -> Self {
+    pub fn create(core: Arc<MaaCore>, callback: Option<AsstApiCallback>, arg: *mut c_void) -> anyhow::Result<Self> {
         let handle = unsafe {
             match callback {
                 Some(cb) => (core.create_ex)(cb, arg),
                 None => (core.create)(),
             }
         };
-        assert!(!handle.is_null(), "AsstCreate returned null handle");
-        Asst { core, handle }
-    }
-
-    pub fn set_user_dir(&self, path: &str) -> anyhow::Result<()> {
-        let c = CString::new(path)?;
-        let ok = unsafe { (self.core.set_user_dir)(c.as_ptr()) };
-        anyhow::ensure!(ok != 0, "AsstSetUserDir failed");
-        Ok(())
-    }
-
-    pub fn load_resource(&self, path: &str) -> anyhow::Result<()> {
-        let c = CString::new(path)?;
-        let ok = unsafe { (self.core.load_resource)(c.as_ptr()) };
-        anyhow::ensure!(ok != 0, "AsstLoadResource failed");
-        Ok(())
+        if handle.is_null() {
+            anyhow::bail!("AsstCreate 返回空句柄（MaaCore 初始化失败）");
+        }
+        Ok(Asst { core, handle })
     }
 
     pub fn set_instance_option(&self, key: i32, value: &str) -> anyhow::Result<()> {

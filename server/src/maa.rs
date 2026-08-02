@@ -92,6 +92,19 @@ impl CoreManager {
             }
         };
 
+        // Global (static) init MUST happen before AsstCreate:
+        // AsstSetUserDir + AsstLoadResource are process-wide.
+        if !user_dir.is_empty() {
+            if let Err(e) = core.set_user_dir(user_dir) {
+                tracing::warn!("AsstSetUserDir 失败: {e}");
+            }
+        }
+        if !resource_dir.is_empty() {
+            if let Err(e) = core.load_resource(resource_dir) {
+                tracing::warn!("AsstLoadResource 失败: {e}");
+            }
+        }
+
         // Set up the callback. `custom_arg` points at CallbackState (leaked; freed on drop).
         let state_ptr: *mut c_void = Arc::as_ptr(&callback_state) as *mut c_void;
         extern "C" fn on_message(msg: AsstMsgId, details: *const c_char, arg: *mut c_void) {
@@ -108,19 +121,18 @@ impl CoreManager {
         let callback: AsstApiCallback = on_message;
 
         // Create the Asst instance.
-        let asst = Arc::new(Asst::create(core.clone(), Some(callback), state_ptr));
-
-        // Initialize user dir and resource.
-        if !user_dir.is_empty() {
-            if let Err(e) = asst.set_user_dir(user_dir) {
-                tracing::warn!("AsstSetUserDir 失败: {e}");
+        let asst = match Asst::create(core.clone(), Some(callback), state_ptr) {
+            Ok(a) => Arc::new(a),
+            Err(e) => {
+                tracing::warn!("MaaCore 初始化失败，WebUI 以降级模式运行: {e}");
+                return Arc::new(CoreManager {
+                    core: None,
+                    asst: None,
+                    callback_state,
+                    running: AtomicBool::new(false),
+                });
             }
-        }
-        if !resource_dir.is_empty() {
-            if let Err(e) = asst.load_resource(resource_dir) {
-                tracing::warn!("AsstLoadResource 失败: {e}");
-            }
-        }
+        };
 
         Arc::new(CoreManager {
             core: Some(core),

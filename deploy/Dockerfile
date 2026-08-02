@@ -1,34 +1,38 @@
 # MaaWeb 容器镜像
-# 包含后端二进制 + 前端静态文件 + MaaCore 运行时
-FROM ubuntu:22.04
+# 基于 Ubuntu 24.04（glibc 2.39，MaaCore v6.16.2 要求 glibc >= 2.38）
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 基础依赖（MaaCore 需要 glibc、libstdc++ 等）
+# 基础依赖：MaaCore 需要 libatomic、libstdc++、libgomp、opencv 相关库等
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libstdc++6 \
     libgomp1 \
+    libatomic1 \
     ca-certificates \
     curl \
     adb \
     && rm -rf /var/lib/apt/lists/*
 
-# 部署目录结构
-WORKDIR /app
+# MaaCore 依赖其兄弟动态库（libMaaUtils.so 等），需通过 LD_LIBRARY_PATH 指定
+ENV LD_LIBRARY_PATH=/app/core_runtime:${LD_LIBRARY_PATH}
 
 # 前端静态文件
 COPY web/dist/ /app/web/dist/
 
 # 后端二进制
-COPY server/target/release/maaweb-server /app/maaweb-server
+COPY server/maaweb-server /app/maaweb-server
+RUN chmod +x /app/maaweb-server
 
-# MaaCore 运行时（构建时若存在则复制）
-COPY core_runtime/ /app/core_runtime/
-
-# 启动脚本
-COPY deploy/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+# MaaCore 运行时（挂载卷，不复制进镜像）
 
 EXPOSE 8080
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+# 直接启动服务端，core_runtime 通过卷挂载到 /app/core_runtime
+# 注意：resource-dir 必须指向包含 resource/ 子目录的根目录（MaaCore 要求）
+CMD ["/app/maaweb-server", \
+     "--core-lib", "/app/core_runtime/libMaaCore.so", \
+     "--resource-dir", "/app/core_runtime", \
+     "--user-dir", "/app/core_runtime", \
+     "--web-dir", "/app/web/dist", \
+     "--bind", "0.0.0.0:8080"]
