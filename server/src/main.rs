@@ -52,17 +52,17 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     tracing::info!("Loading MaaCore from {}", args.core_lib);
-    let manager = maa::CoreManager::init(
-        &args.core_lib,
-        &args.user_dir,
-        &args.resource_dir,
-    )?;
-    tracing::info!("MaaCore version: {}", manager.version());
+    let manager = maa::CoreManager::init(&args.core_lib, &args.user_dir, &args.resource_dir);
+    if manager.healthy() {
+        tracing::info!("MaaCore version: {}", manager.version());
+    } else {
+        tracing::warn!("MaaCore 未加载，以降级模式运行（WebUI 可用，任务功能不可用）");
+    }
 
     let state = api::AppState { manager };
 
     let app = Router::new()
-        .nest("/api", api::router(state))
+        .merge(api::router(state))
         .fallback_service(ServeDir::new(&args.web_dir))
         .layer(CorsLayer::permissive());
 

@@ -64,10 +64,12 @@ async fn get_version(State(state): State<AppState>) -> Json<ApiResponse<Value>> 
 }
 
 async fn get_status(State(state): State<AppState>) -> Json<ApiResponse<Value>> {
+    let healthy = state.manager.healthy();
     let conn = state.manager.connected();
     let running = state.manager.running();
     let last_conn = state.manager.last_connection_info();
     ApiResponse::success(json!({
+        "healthy": healthy,
         "connected": conn,
         "running": running,
         "last_connection_info": last_conn,

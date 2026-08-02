@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, ref } from 'vue'
 
 // ---- State ----
 const version = ref('')
+const healthy = ref(true)
 const connected = ref(false)
 const running = ref(false)
 const logs = ref<Array<{ msg: string; detail: string; time: string }>>([])
@@ -52,6 +53,7 @@ async function api(path: string, method = 'GET', body?: unknown) {
 async function refreshStatus() {
   try {
     const status = await api('/api/status')
+    healthy.value = status.healthy !== false
     connected.value = !!status.connected
     running.value = !!status.running
   } catch {
@@ -183,6 +185,10 @@ onUnmounted(() => {
 
   <!-- Status bar -->
   <div class="card" style="display: flex; gap: 24px; align-items: center; padding: 12px 20px">
+    <span>
+      <span class="status-dot" :class="healthy ? 'connected' : 'disconnected'"></span>
+      {{ healthy ? 'MaaCore 已加载' : 'MaaCore 未加载' }}
+    </span>
     <span>
       <span class="status-dot" :class="connected ? 'connected' : 'disconnected'"></span>
       {{ connected ? '设备已连接' : '未连接设备' }}

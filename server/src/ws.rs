@@ -9,7 +9,6 @@ use axum::{
     },
     response::IntoResponse,
 };
-use futures::SinkExt;
 use serde_json::json;
 use std::sync::Arc;
 

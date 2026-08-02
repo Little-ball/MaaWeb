@@ -57,8 +57,8 @@ impl CallbackState {
 
 /// The MaaCore manager.
 pub struct CoreManager {
-    core: Arc<MaaCore>,
-    asst: Arc<Asst>,
+    core: Option<Arc<MaaCore>>,
+    asst: Option<Arc<Asst>>,
     callback_state: Arc<CallbackState>,
     running: AtomicBool,
 }
@@ -69,20 +69,30 @@ unsafe impl Sync for CoreManager {}
 impl CoreManager {
     /// Load MaaCore from `lib_path`, initialize with `user_dir`/`resource_dir`,
     /// and create a manager around a single Asst instance.
-    pub fn init(
-        lib_path: &str,
-        user_dir: &str,
-        resource_dir: &str,
-    ) -> Result<Arc<CoreManager>> {
-        let core = Arc::new(unsafe { MaaCore::load(lib_path)? });
-
-        // Set up the callback. `custom_arg` points at CallbackState (leaked; freed on drop).
+    ///
+    /// If MaaCore cannot be loaded, a *degraded* manager is returned instead of
+    /// failing: the Web UI still serves, but task APIs report an error.
+    pub fn init(lib_path: &str, user_dir: &str, resource_dir: &str) -> Arc<CoreManager> {
         let callback_state = Arc::new(CallbackState {
             subscribers: Mutex::new(Vec::new()),
             next_sub_id: Mutex::new(0),
             connection_info: Mutex::new(None),
         });
 
+        let core = match unsafe { MaaCore::load(lib_path) } {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                tracing::warn!("MaaCore 加载失败，WebUI 以降级模式运行: {e}");
+                return Arc::new(CoreManager {
+                    core: None,
+                    asst: None,
+                    callback_state,
+                    running: AtomicBool::new(false),
+                });
+            }
+        };
+
+        // Set up the callback. `custom_arg` points at CallbackState (leaked; freed on drop).
         let state_ptr: *mut c_void = Arc::as_ptr(&callback_state) as *mut c_void;
         extern "C" fn on_message(msg: AsstMsgId, details: *const c_char, arg: *mut c_void) {
             if arg.is_null() || details.is_null() {
@@ -102,30 +112,42 @@ impl CoreManager {
 
         // Initialize user dir and resource.
         if !user_dir.is_empty() {
-            asst.set_user_dir(user_dir)?;
+            if let Err(e) = asst.set_user_dir(user_dir) {
+                tracing::warn!("AsstSetUserDir 失败: {e}");
+            }
         }
         if !resource_dir.is_empty() {
-            asst.load_resource(resource_dir)?;
+            if let Err(e) = asst.load_resource(resource_dir) {
+                tracing::warn!("AsstLoadResource 失败: {e}");
+            }
         }
 
-        Ok(Arc::new(CoreManager {
-            core,
-            asst,
+        Arc::new(CoreManager {
+            core: Some(core),
+            asst: Some(asst),
             callback_state,
             running: AtomicBool::new(false),
-        }))
+        })
+    }
+
+    /// Whether MaaCore was loaded successfully.
+    pub fn healthy(&self) -> bool {
+        self.asst.is_some()
     }
 
     pub fn version(&self) -> String {
-        self.core.version()
+        match &self.core {
+            Some(core) => core.version(),
+            None => "MaaCore 未加载".to_string(),
+        }
     }
 
     pub fn connected(&self) -> bool {
-        self.asst.connected()
+        self.asst.as_ref().map_or(false, |a| a.connected())
     }
 
     pub fn running(&self) -> bool {
-        self.asst.running()
+        self.asst.as_ref().map_or(false, |a| a.running())
     }
 
     pub fn last_connection_info(&self) -> Option<Value> {
@@ -134,33 +156,38 @@ impl CoreManager {
 
     /// Connect to a device via ADB.
     pub fn connect(&self, adb_path: &str, address: &str, config: &str) -> Result<()> {
-        self.asst.connect(adb_path, address, config)
+        let asst = self.asst.as_ref().ok_or_else(|| anyhow::anyhow!("MaaCore 未加载"))?;
+        asst.connect(adb_path, address, config)
     }
 
     /// Append a task (e.g. "Fight") with JSON params, returning the task id.
     pub fn append_task(&self, task_type: &str, params: &Value) -> Result<i32> {
+        let asst = self.asst.as_ref().ok_or_else(|| anyhow::anyhow!("MaaCore 未加载"))?;
         let params_str = serde_json::to_string(params)?;
-        let id = self.asst.append_task(task_type, &params_str)?;
+        let id = asst.append_task(task_type, &params_str)?;
         // Register the task id -> type mapping in the callback state so the frontend
         // can tell which task an event belongs to.
         Ok(id)
     }
 
     pub fn start(&self) -> Result<()> {
-        self.asst.start()?;
+        let asst = self.asst.as_ref().ok_or_else(|| anyhow::anyhow!("MaaCore 未加载"))?;
+        asst.start()?;
         self.running.store(true, Ordering::SeqCst);
         Ok(())
     }
 
     pub fn stop(&self) -> Result<()> {
-        self.asst.stop()?;
+        let asst = self.asst.as_ref().ok_or_else(|| anyhow::anyhow!("MaaCore 未加载"))?;
+        asst.stop()?;
         self.running.store(false, Ordering::SeqCst);
         Ok(())
     }
 
     /// Navigate the game back to the home screen.
     pub fn back_home(&self) -> Result<()> {
-        self.asst.back_to_home()
+        let asst = self.asst.as_ref().ok_or_else(|| anyhow::anyhow!("MaaCore 未加载"))?;
+        asst.back_to_home()
     }
 
     /// Subscribe to core events. Returns a receiver.
