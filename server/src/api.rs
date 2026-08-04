@@ -51,6 +51,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/status", get(get_status))
         .route("/api/connect", post(connect))
         .route("/api/task", post(append_task))
+        .route("/api/tasks", get(list_tasks))
+        .route("/api/tasks/clear", post(clear_tasks))
         .route("/api/start", post(start))
         .route("/api/stop", post(stop))
         .route("/api/back-home", post(back_home))
@@ -110,6 +112,16 @@ async fn append_task(
         Ok(id) => ApiResponse::success(json!({ "task_id": id, "type": req.task_type })),
         Err(e) => ApiResponse::error(format!("添加任务失败: {e}")),
     }
+}
+
+async fn list_tasks(State(state): State<AppState>) -> Json<ApiResponse<Value>> {
+    let tasks = state.manager.list_tasks();
+    ApiResponse::success(json!({ "tasks": tasks, "count": tasks.len() }))
+}
+
+async fn clear_tasks(State(state): State<AppState>) -> Json<ApiResponse<Value>> {
+    state.manager.clear_task_list();
+    ApiResponse::success(json!({ "cleared": true }))
 }
 
 async fn start(State(state): State<AppState>) -> Json<ApiResponse<Value>> {

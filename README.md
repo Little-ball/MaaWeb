@@ -18,8 +18,16 @@ MaaWeb 是 [MaaAssistantArknights](https://github.com/MaaAssistantArknights/MaaA
 ```
 
 - **服务端**（`server/`）：Rust + axum。动态加载官方 `libMaaCore.so`，不编译链接 MaaCore，因此构建时无需 MaaCore 源码。
-- **前端**（`web/`）：Vue 3 + Vite。设备连接、任务配置、实时日志。
+- **前端**（`web/`）：Vue 3 + Vite。界面布局贴近 MAA 原版 GUI，自适应桌面/移动端。
 - **设备**：任何通过局域网 ADB 可达的 Android 设备（手机无线调试、平板、模拟器机器）。
+
+## 功能特性
+
+- **完整任务支持**：覆盖 MAA 全部任务类型——开始唤醒、理智作战、公开招募、基建换班、信用商店、领取奖励、肉鸽、抄作业、生息演算、仓库识别、干员识别等。
+- **任务列表管理**：类似 MAA 原版的任务队列，可添加/删除/启停任务，一键长草组合。
+- **Schema 驱动表单**：所有任务参数由 `web/src/config/tasks.ts` 配置驱动，前端动态渲染表单，无需修改组件代码即可适配 MAA 新增任务/参数。
+- **实时日志**：WebSocket 推送 MAA 事件流。
+- **自适应布局**：桌面端侧边栏导航 + 任务双栏布局，移动端自动折叠为单栏。
 
 ## 快速开始
 
@@ -70,6 +78,8 @@ npm run build      # 输出到 web/dist
 | GET  | `/api/status`  | 连接/运行状态 |
 | POST | `/api/connect` | 连接 ADB 设备（`{adb_path, address, config}`）|
 | POST | `/api/task`    | 添加任务（`{task_type, params}`）|
+| GET  | `/api/tasks`   | 已添加任务列表 |
+| POST | `/api/tasks/clear` | 清空任务记录 |
 | POST | `/api/start`   | 开始任务队列 |
 | POST | `/api/stop`    | 停止任务 |
 | POST | `/api/back-home` | 返回游戏首页 |
@@ -77,7 +87,7 @@ npm run build      # 输出到 web/dist
 
 ## 支持的任务类型
 
-`Fight`（刷图）、`Infrast`（基建）、`Recruit`（公招）、`Mall`（商店）、`Award`（领取奖励）、`Roguelike`（肉鸽）、`Copilot`（自动作战）等，参数格式见 [MAA 任务参数文档](https://docs.maa.plus/zh-cn/protocol/integration.html)。
+`StartUp`（唤醒）、`Fight`（刷图）、`Recruit`（公招）、`Infrast`（基建）、`Mall`（商店）、`Award`（奖励）、`Roguelike`（肉鸽）、`Copilot`（抄作业）、`Reclamation`（生息演算）、`Depot`（仓库识别）、`OperBox`（干员识别）、`SSSCopilot`（保全）、`ParadoxCopilot`（悖论模拟）、`Custom`（自定义）等，参数格式见 [MAA 任务参数文档](https://docs.maa.plus/zh-cn/protocol/integration.html)。
 
 ## 项目状态
 

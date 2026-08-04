@@ -61,6 +61,8 @@ pub struct CoreManager {
     asst: Option<Arc<Asst>>,
     callback_state: Arc<CallbackState>,
     running: AtomicBool,
+    /// Record of tasks appended to the current Asst instance.
+    task_list: Mutex<Vec<Value>>,
 }
 
 unsafe impl Send for CoreManager {}
@@ -88,6 +90,7 @@ impl CoreManager {
                     asst: None,
                     callback_state,
                     running: AtomicBool::new(false),
+                    task_list: Mutex::new(Vec::new()),
                 });
             }
         };
@@ -130,6 +133,7 @@ impl CoreManager {
                     asst: None,
                     callback_state,
                     running: AtomicBool::new(false),
+                    task_list: Mutex::new(Vec::new()),
                 });
             }
         };
@@ -139,6 +143,7 @@ impl CoreManager {
             asst: Some(asst),
             callback_state,
             running: AtomicBool::new(false),
+            task_list: Mutex::new(Vec::new()),
         })
     }
 
@@ -177,9 +182,26 @@ impl CoreManager {
         let asst = self.asst.as_ref().ok_or_else(|| anyhow::anyhow!("MaaCore 未加载"))?;
         let params_str = serde_json::to_string(params)?;
         let id = asst.append_task(task_type, &params_str)?;
-        // Register the task id -> type mapping in the callback state so the frontend
-        // can tell which task an event belongs to.
+        // Record the appended task for introspection.
+        if let Ok(mut list) = self.task_list.lock() {
+            list.push(serde_json::json!({
+                "id": id,
+                "type": task_type,
+                "params": params,
+            }));
+        }
         Ok(id)
+    }
+
+    /// List the tasks appended to the current Asst instance.
+    pub fn list_tasks(&self) -> Vec<Value> {
+        self.task_list.lock().unwrap().clone()
+    }
+
+    /// Clear the recorded task list. Note: this does not remove tasks already
+    /// appended to the running Asst; call after stopping to start a fresh queue.
+    pub fn clear_task_list(&self) {
+        self.task_list.lock().unwrap().clear();
     }
 
     pub fn start(&self) -> Result<()> {
