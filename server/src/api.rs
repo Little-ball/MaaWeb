@@ -12,6 +12,7 @@
 //! - WS   /api/ws             -> realtime event stream
 
 use crate::maa::CoreManager;
+use crate::schedule::{ScheduledTask, Scheduler};
 use axum::{
     extract::State,
     routing::{get, post},
@@ -19,11 +20,21 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::sync::Arc;
+
+/// 服务器运行配置（由 main 传入）
+#[derive(Clone)]
+pub struct ServerConfig {
+    pub core_dir: PathBuf,
+    pub web_dir: PathBuf,
+}
 
 #[derive(Clone)]
 pub struct AppState {
     pub manager: Arc<CoreManager>,
+    pub config: ServerConfig,
+    pub scheduler: Arc<Scheduler>,
 }
 
 #[derive(Serialize)]
@@ -56,6 +67,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/start", post(start))
         .route("/api/stop", post(stop))
         .route("/api/back-home", post(back_home))
+        .route("/api/update/check", get(update_check))
+        .route("/api/update", post(update_core_api))
+        .route("/api/schedule", get(schedule_list))
+        .route("/api/schedule", post(schedule_add))
+        .route("/api/schedule/:id", post(schedule_update))
+        .route("/api/schedule/:id/delete", post(schedule_delete))
         .route("/api/ws", get(crate::ws::ws_handler))
         .with_state(state)
 }
@@ -142,5 +159,84 @@ async fn back_home(State(state): State<AppState>) -> Json<ApiResponse<Value>> {
     match state.manager.back_home() {
         Ok(()) => ApiResponse::success(json!({ "back_home": true })),
         Err(e) => ApiResponse::error(format!("返回首页失败: {e}")),
+    }
+}
+
+// ==================== 更新 MaaCore ====================
+
+/// 检查是否有 MaaCore 新版本
+async fn update_check(State(state): State<AppState>) -> Json<ApiResponse<Value>> {
+    let core_dir = state.config.core_dir.clone();
+    match tokio::task::spawn_blocking(move || crate::update::check_update(&core_dir)).await {
+        Ok(Ok((local, latest, has_update))) => {
+            ApiResponse::success(json!({
+                "local_version": local,
+                "latest_version": latest,
+                "has_update": has_update,
+            }))
+        }
+        Ok(Err(e)) => ApiResponse::error(format!("检查更新失败: {e}")),
+        Err(e) => ApiResponse::error(format!("后台任务失败: {e}")),
+    }
+}
+
+/// 执行 MaaCore 更新
+async fn update_core_api(State(state): State<AppState>) -> Json<ApiResponse<Value>> {
+    let core_dir = state.config.core_dir.clone();
+
+    // 更新期间避免任务运行
+    let _ = state.manager.stop();
+
+    match tokio::task::spawn_blocking(move || crate::update::update_core(&core_dir)).await {
+        Ok(Ok(new_version)) => ApiResponse::success(json!({
+            "updated": true,
+            "new_version": new_version,
+            "note": "更新已完成，重启服务后生效",
+        })),
+        Ok(Err(e)) => ApiResponse::error(format!("更新失败: {e}")),
+        Err(e) => ApiResponse::error(format!("后台任务失败: {e}")),
+    }
+}
+
+// ==================== 定时任务调度 ====================
+
+/// 列出所有定时任务
+async fn schedule_list(State(state): State<AppState>) -> Json<ApiResponse<Value>> {
+    let list = state.scheduler.list().await;
+    ApiResponse::success(json!({ "schedules": list }))
+}
+
+/// 添加定时任务
+async fn schedule_add(
+    State(state): State<AppState>,
+    Json(task): Json<ScheduledTask>,
+) -> Json<ApiResponse<Value>> {
+    match state.scheduler.add(task.clone()).await {
+        Ok(()) => ApiResponse::success(json!({ "added": true, "id": task.id })),
+        Err(e) => ApiResponse::error(format!("添加定时任务失败: {e}")),
+    }
+}
+
+/// 更新定时任务（按 id 路径参数）
+async fn schedule_update(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(mut task): Json<ScheduledTask>,
+) -> Json<ApiResponse<Value>> {
+    task.id = id;
+    match state.scheduler.update(task.clone()).await {
+        Ok(()) => ApiResponse::success(json!({ "updated": true, "id": task.id })),
+        Err(e) => ApiResponse::error(format!("更新定时任务失败: {e}")),
+    }
+}
+
+/// 删除定时任务
+async fn schedule_delete(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<ApiResponse<Value>> {
+    match state.scheduler.remove(&id).await {
+        Ok(()) => ApiResponse::success(json!({ "deleted": true, "id": id })),
+        Err(e) => ApiResponse::error(format!("删除定时任务失败: {e}")),
     }
 }

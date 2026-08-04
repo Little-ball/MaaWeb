@@ -7,12 +7,16 @@
 mod api;
 mod maa;
 mod maa_core;
+mod schedule;
+mod update;
 mod ws;
 
 use anyhow::Result;
 use axum::Router;
 use clap::Parser;
+use serde_json::Value;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
@@ -59,7 +63,40 @@ async fn main() -> Result<()> {
         tracing::warn!("MaaCore 未加载，以降级模式运行（WebUI 可用，任务功能不可用）");
     }
 
-    let state = api::AppState { manager };
+    let state = api::AppState {
+        manager: manager.clone(),
+        config: api::ServerConfig {
+            core_dir: std::path::PathBuf::from(&args.user_dir),
+            web_dir: std::path::PathBuf::from(&args.web_dir),
+        },
+        scheduler: Arc::new(schedule::Scheduler::new(
+            std::path::PathBuf::from(&args.user_dir).join("schedule.json"),
+        )),
+    };
+
+    // 启动定时调度器（后台任务）
+    {
+        let scheduler = state.scheduler.clone();
+        let manager = manager.clone();
+        tokio::spawn(async move {
+            schedule::run_scheduler(scheduler, move |tasks| {
+                // 定时触发：清空旧任务，添加定时任务组合并启动
+                tracing::info!("执行定时任务组合，共 {} 个任务", tasks.len());
+                let mgr = manager.clone();
+                tokio::spawn(async move {
+                    mgr.clear_task_list();
+                    for task in tasks {
+                        if let Some(task_type) = task.get("type").and_then(|v| v.as_str()) {
+                            let params = task.get("params").cloned().unwrap_or(Value::Null);
+                            let _ = mgr.append_task(task_type, &params);
+                        }
+                    }
+                    let _ = mgr.start();
+                });
+            })
+            .await;
+        });
+    }
 
     let app = Router::new()
         .merge(api::router(state))

@@ -34,10 +34,28 @@ const selectedTaskId = ref<number | null>(null)
 
 // ---- UI state ----
 const showTaskList = ref(true) // 移动端面板切换
-const activePanel = ref<'tasks' | 'device' | 'logs'>('tasks')
+const activePanel = ref<'tasks' | 'device' | 'logs' | 'settings'>('tasks')
 
 // 当前选中的任务类型（添加新任务时）
 const newTaskType = ref('Fight')
+
+// ==================== Update state ====================
+const updateInfo = ref<{ local: string; latest: string; hasUpdate: boolean } | null>(null)
+const checkingUpdate = ref(false)
+const updating = ref(false)
+
+// ==================== Schedule state ====================
+interface ScheduleItem {
+  id: string
+  name: string
+  cron: string
+  enabled: boolean
+  tasks: Array<{ type: string; params: Record<string, unknown> }>
+}
+const schedules = ref<ScheduleItem[]>([])
+const newScheduleName = ref('每日日常')
+const newScheduleCron = ref('0 9 * * *')
+const showScheduleForm = ref(false)
 
 // ==================== Computed ====================
 const selectedTask = computed(() => {
@@ -237,11 +255,89 @@ function quickAddAll() {
   appendLog('system', '已添加一键长草组合')
 }
 
+// ==================== Update actions ====================
+async function checkUpdate() {
+  checkingUpdate.value = true
+  try {
+    const data = await api('/api/update/check')
+    updateInfo.value = {
+      local: data.local_version,
+      latest: data.latest_version,
+      hasUpdate: data.has_update,
+    }
+    appendLog('update', `本地 ${data.local_version} / 最新 ${data.latest_version}`)
+  } catch (e) {
+    appendLog('error', `检查更新失败: ${e}`)
+  } finally {
+    checkingUpdate.value = false
+  }
+}
+
+async function doUpdate() {
+  updating.value = true
+  try {
+    const data = await api('/api/update', 'POST')
+    appendLog('update', `更新成功: ${data.new_version}，重启服务后生效`)
+    updateInfo.value = null
+  } catch (e) {
+    appendLog('error', `更新失败: ${e}`)
+  } finally {
+    updating.value = false
+  }
+}
+
+// ==================== Schedule actions ====================
+async function loadSchedules() {
+  try {
+    const data = await api('/api/schedule')
+    schedules.value = data.schedules || []
+  } catch {
+    /* ignore */
+  }
+}
+
+async function addSchedule() {
+  try {
+    // 用当前任务列表作为定时任务组合
+    const taskList = tasks.value
+      .filter((t) => t.enabled)
+      .map((t) => ({ type: t.type, params: t.params }))
+    if (!taskList.length) {
+      appendLog('error', '请先在任务面板添加任务')
+      return
+    }
+    const item = {
+      id: `sched_${Date.now()}`,
+      name: newScheduleName.value,
+      cron: newScheduleCron.value,
+      enabled: true,
+      tasks: taskList,
+    }
+    await api('/api/schedule', 'POST', item)
+    appendLog('schedule', `已添加定时任务 "${newScheduleName.value}" (${newScheduleCron.value})`)
+    showScheduleForm.value = false
+    await loadSchedules()
+  } catch (e) {
+    appendLog('error', `添加定时任务失败: ${e}`)
+  }
+}
+
+async function deleteSchedule(id: string) {
+  try {
+    await api(`/api/schedule/${id}/delete`, 'POST')
+    await loadSchedules()
+    appendLog('schedule', `已删除定时任务 ${id}`)
+  } catch (e) {
+    appendLog('error', `删除失败: ${e}`)
+  }
+}
+
 // ==================== Lifecycle ====================
 onMounted(() => {
   connectWs()
   refreshStatus()
   statusTimer = window.setInterval(refreshStatus, 5000)
+  loadSchedules()
 })
 
 onUnmounted(() => {
@@ -288,6 +384,9 @@ onUnmounted(() => {
           </button>
           <button class="nav-item" :class="{ active: activePanel === 'logs' }" @click="activePanel = 'logs'">
             📜 实时日志
+          </button>
+          <button class="nav-item" :class="{ active: activePanel === 'settings' }" @click="activePanel = 'settings'">
+            ⚙️ 设置
           </button>
         </div>
         <div class="sidebar-section">
@@ -401,6 +500,76 @@ onUnmounted(() => {
               <span class="log-detail">{{ line.detail }}</span>
             </div>
             <div v-if="!logs.length" class="log-empty">等待事件…</div>
+          </div>
+        </div>
+        <!-- ===== 设置面板 ===== -->
+        <div v-show="activePanel === 'settings'" class="panel">
+          <div class="panel-header">
+            <h2>设置</h2>
+          </div>
+
+          <!-- 更新 MaaCore -->
+          <div class="card">
+            <div class="card-title">MaaCore 更新</div>
+            <p class="settings-desc">
+              MaaWeb 动态加载官方 MaaCore 运行时。MAA 发新版时，只需更新核心与资源即可，无需重新编译本程序。
+            </p>
+            <div class="settings-row">
+              <button class="btn" :disabled="checkingUpdate" @click="checkUpdate">
+                {{ checkingUpdate ? '检查中…' : '检查更新' }}
+              </button>
+              <button
+                v-if="updateInfo"
+                class="btn btn-success"
+                :disabled="updating || !updateInfo.hasUpdate"
+                @click="doUpdate"
+              >
+                {{ updating ? '更新中…' : updateInfo.hasUpdate ? `更新到 ${updateInfo.latest}` : '已是最新' }}
+              </button>
+            </div>
+            <div v-if="updateInfo" class="update-info">
+              <span>本地: {{ updateInfo.local }}</span>
+              <span>→</span>
+              <span>最新: {{ updateInfo.latest }}</span>
+              <span v-if="updateInfo.hasUpdate" class="update-badge">有新版本</span>
+            </div>
+          </div>
+
+          <!-- 定时任务 -->
+          <div class="card">
+            <div class="card-title">定时任务</div>
+            <p class="settings-desc">
+              配置定时执行的任务组合。cron 格式：<code>分 时 日 月 星期</code>，如 <code>0 9 * * *</code> 表示每天 09:00。
+            </p>
+
+            <button class="btn" @click="showScheduleForm = !showScheduleForm">
+              {{ showScheduleForm ? '收起' : '+ 添加定时任务' }}
+            </button>
+
+            <div v-if="showScheduleForm" class="schedule-form">
+              <div class="field">
+                <label>任务名称</label>
+                <input v-model="newScheduleName" class="input" />
+              </div>
+              <div class="field">
+                <label>Cron 表达式</label>
+                <input v-model="newScheduleCron" class="input" placeholder="0 9 * * *" />
+              </div>
+              <p class="field-desc">将使用当前任务面板中启用的任务作为定时组合</p>
+              <button class="btn btn-success" @click="addSchedule">保存定时任务</button>
+            </div>
+
+            <div v-if="schedules.length" class="schedule-list">
+              <div v-for="s in schedules" :key="s.id" class="schedule-item">
+                <span class="schedule-status" :class="s.enabled ? 'ok' : 'bad'"></span>
+                <div class="schedule-info">
+                  <div class="schedule-name">{{ s.name }}</div>
+                  <div class="schedule-cron">{{ s.cron }}</div>
+                </div>
+                <button class="btn btn-danger btn-small" @click="deleteSchedule(s.id)">删除</button>
+              </div>
+            </div>
+            <p v-else class="empty-tip">暂无定时任务</p>
           </div>
         </div>
       </section>
@@ -745,6 +914,103 @@ onUnmounted(() => {
 .btn-small {
   padding: 5px 12px;
   font-size: 12px;
+}
+
+/* ===== 设置 ===== */
+.settings-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+.settings-desc code {
+  background: var(--bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.settings-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.update-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border-radius: 6px;
+}
+
+.update-badge {
+  background: var(--warning);
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.schedule-form {
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--bg);
+  border-radius: 8px;
+}
+
+.field-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.schedule-list {
+  margin-top: 12px;
+}
+
+.schedule-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.schedule-status {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.schedule-status.ok { background: var(--success); }
+.schedule-status.bad { background: var(--danger); }
+
+.schedule-info {
+  flex: 1;
+}
+
+.schedule-name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.schedule-cron {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: monospace;
+}
+
+.empty-tip {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 12px;
 }
 
 /* ===== 自适应 ===== */
